@@ -1,0 +1,932 @@
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.*;
+import org.eclipse.swt.events.*;
+import org.eclipse.wb.swt.SWTResourceManager;
+import org.apache.commons.codec.binary.Base64;
+
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
+import javax.crypto.spec.SecretKeySpec;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.KeyGenerator;
+
+import javax.swing.JPanel;
+import javax.swing.JOptionPane;
+import javax.swing.JPasswordField;
+import javax.swing.JLabel;
+
+import java.util.Arrays;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.IOException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+
+import java.security.Key;
+import java.security.NoSuchAlgorithmException;
+
+public class EncryptionTool {
+
+	protected Shell shell;
+
+	// text encryption/decryption variables
+	private Text plainTextTxtbox;
+	private Text decryptedTxtbox;
+	private Text encryptedTxtbox;
+
+	// folder encryption/decryption variables
+	private Text browseFolderTxtbox;
+	private Text encryptedFolderTxtbox;
+	private Text decryptedFolderTxtbox;
+
+	// password variables for folder encryption/decryption
+	private static char[] userInputEPassword;
+	private static char[] userInputDPassword;
+
+	// text file encryption/decryption variables
+	private Text browseFileTxtbox;
+	private Text encryptedFileTxtbox;
+	private Text decryptedFileTxtbox;
+
+	// image file encryption/decryption
+	private Text browseImageTxtbox;
+	private Text encryptedImageTxtbox;
+	private Text decryptedImageTxtbox;
+
+	// Cipher variables
+	private static Cipher encryptCipher;
+	private static Cipher decryptCipher;
+
+	/**
+	 * Launch the application.
+	 * @param args
+	 */
+
+	// Launching of the application, can be accessed publically
+	public static void main(String[] args) {
+		try {
+			EncryptionTool window = new EncryptionTool();
+			window.open();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Open the window.
+	 */
+	// Opening the SWT display shell
+	public void open() throws NoSuchAlgorithmException {
+		Display display = Display.getDefault();
+		createContents();
+		shell.open();
+		shell.layout();
+		while (!shell.isDisposed()) {
+			if (!display.readAndDispatch()) {
+				display.sleep();
+			}
+		}
+	}
+
+	// Message alerts for successful encryption & decryption
+	private void MsgEncryptionStatus(){
+		JOptionPane.showMessageDialog(null, "Encryption successful!");
+	}
+
+	private void MsgDecryptionStatus(){
+		JOptionPane.showMessageDialog(null, "Decryption successful!");
+	}
+
+	//Encrypt method used in Text File & Folder Encryption. Takes 2 arguments
+	private static void encrypt(InputStream input, OutputStream output) throws IOException {
+		output = new CipherOutputStream (output, encryptCipher);
+		writeBytes(input, output);
+	}
+
+	//Decrypt method used in Text File & Folder Decryption. Takes 2 arguments
+	private static void decrypt(InputStream input, OutputStream output) throws IOException {
+		input = new CipherInputStream(input, decryptCipher);
+		writeBytes(input, output);
+	}
+
+	//Write Bytes method used in Text File & Folder Encryption. Takes 2 arguments
+	private static void writeBytes(InputStream input, OutputStream output) throws IOException {
+		byte[] writeBuffer = new byte[512];
+		int readBytes = 0;
+
+		while ((readBytes = input.read(writeBuffer))>=0) {
+			output.write(writeBuffer, 0, readBytes);
+		}
+		output.close();
+		input.close();
+	}
+
+	// Method used in zipping a folder before encryption
+	private static void zipFile(File fileToZip, String fileName, ZipOutputStream zipOut) throws IOException {
+		if (fileToZip.isHidden()) {
+			return;
+		}
+    
+		if (fileToZip.isDirectory()) {
+			File[] children = fileToZip.listFiles();
+			for (File childFile : children) {
+				zipFile(childFile, fileName + "/" + childFile.getName(), zipOut);
+			}
+			return;
+		}
+    
+		FileInputStream fis = new FileInputStream(fileToZip);
+		ZipEntry zipEntry = new ZipEntry(fileName);
+		zipOut.putNextEntry(zipEntry);
+		byte[] bytes = new byte[1024];
+		int length;
+		while ((length = fis.read(bytes)) >= 0) {
+			zipOut.write(bytes, 0, length);
+		}
+		fis.close();
+	}
+
+	public void unZipFolder(){
+		String dest = "M:\\Decrypted Folder";
+		String zipSource = "M:\\Decrypted Folder.zip";
+
+		File dir = new File(dest);
+		
+    // create output directory if it doesn't exist
+		if(!dir.exists()) dir.mkdirs();
+		FileInputStream fis;
+		
+    //buffer for read and write data to file
+		byte[] buffer = new byte[1024];
+		try {
+			fis = new FileInputStream(zipSource);
+			ZipInputStream zis = new ZipInputStream(fis);
+			ZipEntry ze = zis.getNextEntry();
+			while(ze != null){
+				String fileName = ze.getName();
+				File newFile = new File(dest + File.separator + fileName);
+				//	System.out.println("Unzipping to "+newFile.getAbsolutePath());
+				//create directories for sub directories in zip
+				new File(newFile.getParent()).mkdirs();
+				FileOutputStream fos = new FileOutputStream(newFile);
+				int len;
+				while ((len = zis.read(buffer)) > 0) {
+					fos.write(buffer, 0, len);
+				}
+				fos.close();
+				//close this ZipEntry
+				zis.closeEntry();
+				ze = zis.getNextEntry();
+			}
+			//close last ZipEntry
+			zis.closeEntry();
+			zis.close();
+			fis.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+	
+  /**
+	 * Create contents of the window.
+	 */
+
+	protected void createContents() throws NoSuchAlgorithmException {
+		// Key generator for image encryption/decryption
+		KeyGenerator keyGenerator = KeyGenerator.getInstance("AES");
+		keyGenerator.init(128);
+		Key key = keyGenerator.generateKey();
+
+		// Definition of the encryption key and IV for cipher
+		byte[] keyBytes = new byte[] { 0x01, 0x23, 0x45, 0x67, (byte) 0x89, (byte) 0xab, (byte) 0xcd, (byte) 0xef };
+		byte[] ivBytes = new byte[] { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+
+		// DES encryption key for text, text file & folder encryption
+		final SecretKeySpec secretKey = new SecretKeySpec(keyBytes, "DES");
+		final IvParameterSpec ivSpec = new IvParameterSpec(ivBytes);
+
+		shell = new Shell();
+		shell.setImage(SWTResourceManager.getImage("M:\\eclipse-neon\\ComputerSecurity_CW\\PlatformEncryptionlogo.png"));
+		shell.setBackground(SWTResourceManager.getColor(SWT.COLOR_TITLE_INACTIVE_BACKGROUND));
+		shell.setSize(467, 488);
+		shell.setText("Encryption & Decryption Program");
+
+		TabFolder tabFolder = new TabFolder(shell, SWT.NONE);
+		tabFolder.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		tabFolder.setBounds(10, 22, 431, 417);
+
+		TabItem tbtmText = new TabItem(tabFolder, SWT.NONE);
+		tbtmText.setText("Text");
+
+		Composite composite_3 = new Composite(tabFolder, SWT.NONE);
+		composite_3.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		tbtmText.setControl(composite_3);
+
+		plainTextTxtbox = new Text(composite_3, SWT.BORDER | SWT.WRAP);
+		plainTextTxtbox.setBounds(124, 119, 289, 61);
+
+		Label lblTextEncryption = new Label(composite_3, SWT.CENTER);
+		lblTextEncryption.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblTextEncryption.setFont(SWTResourceManager.getFont("Segoe UI", 16, SWT.BOLD));
+		lblTextEncryption.setBounds(10, 10, 403, 29);
+		lblTextEncryption.setText("Text Encryption/Decryption");
+
+		Label lblInsertTextHere = new Label(composite_3, SWT.NONE);
+		lblInsertTextHere.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblInsertTextHere.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblInsertTextHere.setBounds(10, 142, 108, 21);
+		lblInsertTextHere.setText("Insert text here:");
+
+		// TEXT ENCRYPTION: BUTTON CREATION - SET TO FALSE
+		Button btnTextEncrypt = new Button(composite_3, SWT.NONE);
+		Button btnTextDecrypt = new Button(composite_3, SWT.NONE);
+		btnTextDecrypt.setEnabled(false);
+
+		btnTextEncrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextEncrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// TEXT ENCRYPTION AND DECRYPTION: ENCRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				if (plainTextTxtbox.getText().length() != 0) {
+
+					try {
+						// get input text to be encrypted from the text bar named plainTextTxtbox
+						byte[] input = plainTextTxtbox.getText().getBytes();
+						// initiate a Cipher variable for encryption
+						Cipher cipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+						cipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec);
+						// Encryption in action
+						byte[] encrypted = cipher.doFinal(input);
+						// Display the base64 encoded result in the text bar named encryptedTxtbox
+						String x = new Base64().encodeToString(encrypted);
+						encryptedTxtbox.setText(x);
+
+						// Display message box for successful encryption
+						MsgEncryptionStatus();
+
+						// Set Text Decrypt button to true
+						btnTextDecrypt.setEnabled(true);
+					}
+
+					catch(Exception ex) {
+						ex.printStackTrace();
+						return;
+					}
+				}
+				else {
+					JOptionPane.showMessageDialog(null, "Please enter some characters to encrypt.");
+				}
+			}
+		});
+
+		btnTextEncrypt.setBounds(124, 198, 117, 25);
+		btnTextEncrypt.setText("ENCRYPT");
+
+		encryptedTxtbox = new Text(composite_3, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.MULTI);
+		encryptedTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
+		encryptedTxtbox.setBounds(10, 282, 195, 84);
+
+		// TEXT ENCRYPTION AND DECRYPTION: DECRYPT BUTTON
+
+		btnTextDecrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextDecrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			public void widgetSelected(SelectionEvent e) {
+				try {
+					String x = encryptedTxtbox.getText();
+					// get input text to be decrypted from the text bar named encryptedTxtbox
+					byte[] encrypted = new Base64().decode(x);
+					// initiate a Cipher variable for decryption
+					Cipher cipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+					cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec);
+					// Decryption in action
+					byte[] decrypted = cipher.doFinal(encrypted);
+					// Display the base64 encoded result in the text bar named decryptedTxtbox
+					decryptedTxtbox.setText(new String(decrypted));
+
+					// Display message box for successful decryption
+					MsgDecryptionStatus();
+				}
+
+				catch(Exception ex) {
+					ex.printStackTrace();
+					return;
+				}
+			}
+		});
+
+		btnTextDecrypt.setBounds(296, 198, 117, 25);
+		btnTextDecrypt.setText("DECRYPT");
+
+		decryptedTxtbox = new Text(composite_3, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.MULTI);
+		decryptedTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_DARK_SHADOW));
+		decryptedTxtbox.setBounds(224, 282, 189, 84);
+
+		Label lblEncryptedText = new Label(composite_3, SWT.CENTER);
+		lblEncryptedText.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblEncryptedText.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblEncryptedText.setBounds(31, 249, 136, 27);
+		lblEncryptedText.setText("Encrypted text");
+
+		Label lblDecryptedText = new Label(composite_3, SWT.CENTER);
+		lblDecryptedText.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblDecryptedText.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblDecryptedText.setText("Decrypted text");
+		lblDecryptedText.setBounds(248, 249, 136, 27);
+
+		Button btnTextClear = new Button(composite_3, SWT.NONE);
+		btnTextClear.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextClear.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// TEXT ENCRYPTION AND DECRYPTION: CLEAR ALL BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				plainTextTxtbox.setText("");
+				encryptedTxtbox.setText("");
+				decryptedTxtbox.setText("");
+
+				// Disable the Decrypt button
+				btnTextDecrypt.setEnabled(false);
+			}
+		});
+		btnTextClear.setBounds(338, 88, 75, 25);
+		btnTextClear.setText("CLEAR");
+
+		Label lblEnterTextBelow = new Label(composite_3, SWT.CENTER);
+		lblEnterTextBelow.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblEnterTextBelow.setForeground(SWTResourceManager.getColor(SWT.COLOR_LIST_SELECTION));
+		lblEnterTextBelow.setFont(SWTResourceManager.getFont("Segoe UI", 9, SWT.NORMAL));
+		lblEnterTextBelow.setBounds(10, 45, 403, 15);
+		lblEnterTextBelow.setText("Enter text in the box provided, then click Encrypt and Decrypt.");
+
+		Label label_1 = new Label(composite_3, SWT.CENTER);
+		label_1.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		label_1.setBounds(10, 66, 403, 15);
+		label_1.setText("___________________________________________________________________________________");
+
+		// FOLDER ENCRYPTION AND DECRYPTION
+		TabItem tbtmFolder = new TabItem(tabFolder, SWT.NONE);
+		tbtmFolder.setText("Folder");
+
+		Composite composite = new Composite(tabFolder, SWT.NONE);
+		tbtmFolder.setControl(composite);
+
+		Label lblFolderEncryptiondecryption = new Label(composite, SWT.CENTER);
+		lblFolderEncryptiondecryption.setText("Folder Encryption/Decryption");
+		lblFolderEncryptiondecryption.setFont(SWTResourceManager.getFont("Segoe UI", 16, SWT.BOLD));
+		lblFolderEncryptiondecryption.setBounds(10, 10, 403, 29);
+
+		// FOLDER ENCRYPTION: BUTTON CREATION - SET TO FALSE
+		Button btnFolderBrowse = new Button(composite, SWT.NONE);
+		Button btnFolderEncrypt = new Button(composite, SWT.NONE);
+		Button btnFolderDecrypt = new Button(composite, SWT.NONE);
+		btnFolderEncrypt.setEnabled(false);
+		btnFolderDecrypt.setEnabled(false);
+
+		btnFolderBrowse.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnFolderBrowse.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// FOLDER ENCRYPTION AND DECRYPTION: BROWSE FOLDER BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				DirectoryDialog browseFolderDialog = new DirectoryDialog(shell);
+
+				// Set the initial filter path according to what has been selected or typed in
+				browseFolderDialog.setFilterPath(browseFolderTxtbox.getText());
+
+				// Change the title bar text
+				browseFolderDialog.setText("Browse folders... ");
+
+				// Customizable message displayed in the dialog
+				browseFolderDialog.setMessage("Select a folder to encrypt");
+
+				// Calling open() will open and run the dialog. It will return the selected directory, or
+				// null if user cancels
+				String dir = browseFolderDialog.open();
+				if (dir != null) {
+					// Set the text box to the new selection
+					browseFolderTxtbox.setText(dir);
+
+					// Enable the Folder Encrypt button
+					btnFolderEncrypt.setEnabled(true);
+				}
+			}
+		});
+
+		btnFolderBrowse.setBounds(41, 141, 100, 29);
+		btnFolderBrowse.setText("Browse...");
+
+
+		btnFolderEncrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnFolderEncrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// FOLDER ENCRYPTION AND DECRYPTION: ENCRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				// Message Box popup to prompt user to enter password
+				JPanel panel = new JPanel();
+				JLabel label = new JLabel("Enter a password:");
+				// Password field 
+				JPasswordField pass = new JPasswordField(10);
+				panel.add(label);
+				panel.add(pass);
+				String[] options = new String[]{"OK", "Cancel"};
+				int option = JOptionPane.showOptionDialog(null, panel, "Enter a password for encryption",
+						JOptionPane.NO_OPTION, JOptionPane.PLAIN_MESSAGE,
+						null, options, options[1]);
+				if(option == 0) { // pressing OK button
+
+					userInputEPassword = pass.getPassword();
+
+					try {
+						// Creating an output stream for folder and passing it to a zipped output stream
+						FileOutputStream fos = new FileOutputStream("M:\\Zipped Folder.zip");
+						ZipOutputStream zipOut = new ZipOutputStream(fos);
+						File fileToZip = new File(browseFolderTxtbox.getText());
+
+						zipFile(fileToZip, fileToZip.getName(), zipOut);
+						zipOut.close();
+						fos.close();
+
+						// Initiate the encrypt Cipher for DES encryption
+						encryptCipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+						encryptCipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec);
+
+						// Encrypt function which takes the selected zipped folder and outputs it as an encrypted folder
+						encrypt(new FileInputStream("M:\\Zipped Folder.zip"), new FileOutputStream("M:\\Encrypted Folder"));
+
+						// Display the encrypted folder location
+						encryptedFolderTxtbox.setText("M:\\Encrypted Folder");
+
+						// Display message box for successful encryption
+						MsgEncryptionStatus();
+
+						// Enable Folder Decryption button
+						btnFolderDecrypt.setEnabled(true);
+					} catch (Exception e1) {
+						e1.printStackTrace();
+					}
+				}
+			} 
+		});
+
+		btnFolderEncrypt.setBounds(323, 181, 90, 25);
+		btnFolderEncrypt.setText("ENCRYPT");
+
+
+		btnFolderDecrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnFolderDecrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// FOLDER ENCRYPTION AND DECRYPTION: DECRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				JPanel panel = new JPanel();
+				JLabel label = new JLabel("Enter a password:");
+				JPasswordField pass = new JPasswordField(10);
+				panel.add(label);
+				panel.add(pass);
+				String[] options = new String[]{"OK", "Cancel"};
+				int option = JOptionPane.showOptionDialog(null, panel, "Enter a password for decryption",
+						JOptionPane.NO_OPTION, JOptionPane.PLAIN_MESSAGE,
+						null, options, options[1]);
+				if(option == 0) // pressing OK button
+				{
+					userInputDPassword = pass.getPassword();
+
+					// Comparing the password entered in Encryption and password entered for Decryption
+					if (Arrays.equals(userInputEPassword, userInputDPassword)) {
+						//	System.out.println("Your password is correct.");
+						try {
+
+
+							// Initiate the decrypt Cipher for DES encryption
+							decryptCipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+							decryptCipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec);
+
+							// Decrypt function which takes the encrypted folder and outputs it as an encrypted zipped folder
+							decrypt(new FileInputStream(encryptedFolderTxtbox.getText()), new FileOutputStream("M:\\Decrypted Folder.zip"));
+
+							unZipFolder();
+
+							// Display the decrypted folder location
+							decryptedFolderTxtbox.setText("M:\\Decrypted Folder");
+
+							// Display message box for successful decryption
+							MsgDecryptionStatus();
+						} catch (Exception e1) {
+							e1.printStackTrace();
+						}
+					}
+					else {
+						JOptionPane.showMessageDialog(null, "You have entered an incorrect password.");
+					}}
+
+			}
+		});
+		btnFolderDecrypt.setBounds(323, 284, 90, 25);
+		btnFolderDecrypt.setText("DECRYPT");
+
+		browseFolderTxtbox = new Text(composite, SWT.BORDER | SWT.WRAP | SWT.MULTI);
+		browseFolderTxtbox.setBounds(184, 131, 229, 44);
+
+		encryptedFolderTxtbox = new Text(composite, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.MULTI);
+		encryptedFolderTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
+		encryptedFolderTxtbox.setBounds(184, 223, 229, 55);
+
+		Label lblEncryptedFolderLocation = new Label(composite, SWT.WRAP | SWT.CENTER);
+		lblEncryptedFolderLocation.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblEncryptedFolderLocation.setBounds(21, 236, 120, 49);
+		lblEncryptedFolderLocation.setText("Encrypted folder location:");
+
+		decryptedFolderTxtbox = new Text(composite, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.MULTI);
+		decryptedFolderTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_DARK_SHADOW));
+		decryptedFolderTxtbox.setBounds(184, 330, 229, 49);
+
+		Label lblDecryptedFolderLocation = new Label(composite, SWT.WRAP | SWT.CENTER);
+		lblDecryptedFolderLocation.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblDecryptedFolderLocation.setBounds(21, 328, 120, 49);
+		lblDecryptedFolderLocation.setText("Decrypted folder location:");
+
+		Button btnFolderClear = new Button(composite, SWT.NONE);
+		btnFolderClear.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnFolderClear.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// FOLDER ENCRYPTION AND DECRYPTION: CLEAR ALL BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				browseFolderTxtbox.setText("");
+				encryptedFolderTxtbox.setText("");
+				decryptedFolderTxtbox.setText("");
+
+				btnFolderEncrypt.setEnabled(false);
+				btnFolderDecrypt.setEnabled(false);
+			}
+		});
+		btnFolderClear.setBounds(338, 100, 75, 25);
+		btnFolderClear.setText("CLEAR");
+
+		Label lblBrowseFolderThen = new Label(composite, SWT.CENTER);
+		lblBrowseFolderThen.setForeground(SWTResourceManager.getColor(SWT.COLOR_LIST_SELECTION));
+		lblBrowseFolderThen.setBounds(10, 45, 403, 15);
+		lblBrowseFolderThen.setText("Select folder by browsing then click Encrypt and Decrypt.");
+
+		Label label = new Label(composite, SWT.CENTER);
+		label.setText("___________________________________________________________________________________");
+		label.setBounds(10, 66, 403, 15);
+
+		// IMAGE ENCRYPTION AND DECRYPTION
+		TabItem tbtmImage = new TabItem(tabFolder, SWT.NONE);
+		tbtmImage.setText("Image");
+
+		Composite composite_1 = new Composite(tabFolder, SWT.NONE);
+		tbtmImage.setControl(composite_1);
+
+		Label lblImageEncryptiondecryption = new Label(composite_1, SWT.CENTER);
+		lblImageEncryptiondecryption.setFont(SWTResourceManager.getFont("Segoe UI", 16, SWT.BOLD));
+		lblImageEncryptiondecryption.setBounds(10, 10, 403, 36);
+		lblImageEncryptiondecryption.setText("Image Encryption/Decryption");
+
+		// IMAGE ENCRYPTION: BUTTON CREATION - SET TO FALSE
+		Button btnImageBrowse = new Button(composite_1, SWT.NONE);
+		Button btnImageEncrypt = new Button(composite_1, SWT.NONE);
+		Button btnImageDecrypt = new Button(composite_1, SWT.NONE);
+		btnImageEncrypt.setEnabled(false);
+		btnImageDecrypt.setEnabled(false);
+
+		btnImageBrowse.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnImageBrowse.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// IMAGE ENCRYPTION AND DECRYPTION: BROWSE IMAGE BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				try {
+					// Opening new shell to select image and display in textbox
+					final Shell shell = new Shell();
+					FileDialog fileDialog = new FileDialog(shell, SWT.OPEN);
+					String fileName = fileDialog.open();
+					if (fileName != null) {
+						browseImageTxtbox.setText(fileName);
+
+						// Enable Image Encrypt button
+						btnImageEncrypt.setEnabled(true);
+					}
+				} catch (Exception e1) {
+					e1.printStackTrace();
+				}
+			}
+		});
+		btnImageBrowse.setBounds(21, 153, 115, 31);
+		btnImageBrowse.setText("Select image...");
+
+		browseImageTxtbox = new Text(composite_1, SWT.BORDER | SWT.WRAP | SWT.MULTI);
+		browseImageTxtbox.setBounds(163, 138, 250, 46);
+
+		encryptedImageTxtbox = new Text(composite_1, SWT.BORDER | SWT.WRAP | SWT.MULTI);
+		encryptedImageTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
+		encryptedImageTxtbox.setEditable(false);
+		encryptedImageTxtbox.setBounds(163, 235, 252, 46);
+
+		btnImageEncrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnImageEncrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// IMAGE ENCRYPTION AND DECRYPTION: ENCRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				// Get image from browseImageTxtbox and creates new File instance
+				File file = new File(browseImageTxtbox.getText());
+
+				try {
+					// Creating a connection to the image file
+					FileInputStream imageInFile = new FileInputStream(browseImageTxtbox.getText());
+					// Turning the image file into a byte array
+					byte imageData[] = new byte[(int) file.length()];
+					imageInFile.read(imageData);
+					imageInFile.close();
+
+					// Initiating a Cipher variable to be used for encryption
+					Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+					cipher.init(Cipher.ENCRYPT_MODE, key);
+					// Encryption in action
+					byte [] encrypted = cipher.doFinal(imageData);
+
+					// Creation of Output Stream in which the new encrypted file will be written to 
+					FileOutputStream fos = new FileOutputStream ("M:\\Image File Encryption\\Encrypted.jpg");
+					fos.write(encrypted);
+					fos.close();        
+
+					// Display the file location of the new encrypted file in textbox called encryptedImageTxtbox
+					encryptedImageTxtbox.setText("M:\\Image File Encryption\\Encrypted.jpg");
+
+					// Display message box for successful encryption
+					MsgEncryptionStatus();
+
+					// Enable Image Decrypt button
+					btnImageDecrypt.setEnabled(true);
+				}
+
+				catch(Exception ex){
+					ex.printStackTrace();
+					return;
+				}
+			}
+		});
+		btnImageEncrypt.setBounds(318, 190, 95, 25);
+		btnImageEncrypt.setText("ENCRYPT");
+
+
+		btnImageDecrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnImageDecrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// IMAGE ENCRYPTION AND DECRYPTION: DECRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				// Creates file instance from the location of the encrypted image file
+				File file = new File("M:\\Image File Encryption\\Encrypted.jpg");
+
+				try {                                           
+					// Converting encrypted file into bytes ready for decryption
+					FileInputStream imageInFile = new FileInputStream(file);
+					byte imageData[] = new byte[(int) file.length()];
+					imageInFile.read(imageData);
+					imageInFile.close();
+
+					// Initiating a Cipher variable to be used for decryption
+					Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+					cipher.init(Cipher.DECRYPT_MODE, key);
+					byte [] decrypted = cipher.doFinal(imageData);
+
+					// Creation of Output Stream in which the new decrypted file will be written to 
+					FileOutputStream fos = new FileOutputStream ("M:\\Image File Encryption\\Decrypted.jpg");
+					fos.write(decrypted);
+					fos.close();
+
+					// Display the file location of the new decrypted file in textbox called decryptedImageTxtbox
+					decryptedImageTxtbox.setText("M:\\Image File Encryption\\Decrypted.jpg");
+
+					// Display message box for successful decryption
+					MsgDecryptionStatus();
+				}
+
+				catch(Exception ex){
+					ex.printStackTrace();
+					return;
+				}      
+			}
+		});
+		btnImageDecrypt.setBounds(318, 287, 95, 25);
+		btnImageDecrypt.setText("DECRYPT");
+
+		decryptedImageTxtbox = new Text(composite_1, SWT.BORDER | SWT.WRAP | SWT.MULTI);
+		decryptedImageTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_DARK_SHADOW));
+		decryptedImageTxtbox.setEditable(false);
+		decryptedImageTxtbox.setBounds(163, 318, 250, 46);
+
+		Button btnImageClear = new Button(composite_1, SWT.NONE);
+		btnImageClear.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnImageClear.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// IMAGE ENCRYPTION AND DECRYPTION: CLEAR ALL BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				browseImageTxtbox.setText("");
+				encryptedImageTxtbox.setText("");
+				decryptedImageTxtbox.setText("");
+				btnImageEncrypt.setEnabled(false);
+				btnImageDecrypt.setEnabled(false);
+			}
+		});
+		btnImageClear.setBounds(336, 96, 77, 25);
+		btnImageClear.setText("CLEAR");
+
+		Label lblEncryptedImageLocation = new Label(composite_1, SWT.WRAP | SWT.CENTER);
+		lblEncryptedImageLocation.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblEncryptedImageLocation.setBounds(21, 233, 115, 46);
+		lblEncryptedImageLocation.setText("Encrypted image location:");
+
+		Label lblDecryptedImageLocation = new Label(composite_1, SWT.WRAP | SWT.CENTER);
+		lblDecryptedImageLocation.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblDecryptedImageLocation.setBounds(21, 316, 115, 46);
+		lblDecryptedImageLocation.setText("Decrypted image location:");
+
+		Label lblSelectAnImage = new Label(composite_1, SWT.CENTER);
+		lblSelectAnImage.setForeground(SWTResourceManager.getColor(SWT.COLOR_LIST_SELECTION));
+		lblSelectAnImage.setBounds(10, 45, 403, 25);
+		lblSelectAnImage.setText("Select an image file by browsing, then select Encrypt or Decrypt.");
+
+		Label label_2 = new Label(composite_1, SWT.CENTER);
+		label_2.setText("___________________________________________________________________________________");
+		label_2.setBounds(10, 65, 403, 15);
+
+		// TEXT FILE ENCRYPTION AND DECRYPTION
+		TabItem tbtmTextFile = new TabItem(tabFolder, SWT.NONE);
+		tbtmTextFile.setText("Text File");
+
+		Composite composite_2 = new Composite(tabFolder, SWT.NONE);
+		composite_2.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		tbtmTextFile.setControl(composite_2);
+
+		Label lblTextFileEncryptiondecryption = new Label(composite_2, SWT.CENTER);
+		lblTextFileEncryptiondecryption.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblTextFileEncryptiondecryption.setFont(SWTResourceManager.getFont("Segoe UI", 16, SWT.BOLD));
+		lblTextFileEncryptiondecryption.setBounds(10, 10, 403, 32);
+		lblTextFileEncryptiondecryption.setText("Text File Encryption/Decryption");
+
+		browseFileTxtbox = new Text(composite_2, SWT.BORDER);
+		browseFileTxtbox.setBounds(155, 142, 258, 42);
+
+		encryptedFileTxtbox = new Text(composite_2, SWT.BORDER | SWT.READ_ONLY);
+		encryptedFileTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
+		encryptedFileTxtbox.setBounds(155, 230, 258, 39);
+
+		// IMAGE ENCRYPTION: BUTTON CREATION - SET TO FALSE
+		Button btnTextFileEncrypt = new Button(composite_2, SWT.NONE);
+		Button btnTextFileDecrypt = new Button(composite_2, SWT.NONE);
+		Button btnBrowseTextFile = new Button(composite_2, SWT.NONE);
+		btnTextFileEncrypt.setEnabled(false);
+		btnTextFileDecrypt.setEnabled(false);
+
+		btnTextFileEncrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextFileEncrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// TEXT FILE ENCRYPTION AND DECRYPTION: ENCRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				try {
+					// Initiate the Encrypt Cipher variable to be used in encryption
+					encryptCipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+
+					// Encryption process done using the secret key and IV declared
+					encryptCipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec);
+
+					// Encrypt function which takes the selected text file and outputs it as an encrypted file
+					encrypt(new FileInputStream(browseFileTxtbox.getText()),
+							new FileOutputStream("M:\\Text File Encryption\\Encrypted.txt"));
+
+					// Display the encrypted file in encryptedFileTxtbox
+					encryptedFileTxtbox.setText("M:\\Text File Encryption\\Encrypted.txt");
+
+					// Display message box for successful encryption
+					MsgEncryptionStatus();
+
+					//Enable Text File Decrypt button
+					btnTextFileDecrypt.setEnabled(true);
+				} catch (Exception el) {
+					el.printStackTrace();
+				}
+			}
+		});
+		btnTextFileEncrypt.setBounds(307, 190, 106, 25);
+		btnTextFileEncrypt.setText("ENCRYPT");
+
+
+		btnTextFileDecrypt.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextFileDecrypt.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// TEXT FILE ENCRYPTION AND DECRYPTION: DECRYPT BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				try {
+					// Initiate the Decrypt Cipher variable to be used in encryption
+					decryptCipher = Cipher.getInstance("DES/CBC/PKCS5Padding");
+
+					// Decryption process done using the secret key and IV declared
+					decryptCipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec);
+
+					// Decrypt function which takes encrypted text file and outputs it as a decrypted file
+					decrypt(new FileInputStream(encryptedFileTxtbox.getText()),
+							new FileOutputStream("M:\\Text File Encryption\\Decrypted.txt"));
+
+					// Display the decrypted file in decryptedFileTxtbox
+					decryptedFileTxtbox.setText("M:\\Text File Encryption\\Decrypted.txt");
+
+					// Display message box for successful decryption
+					MsgDecryptionStatus();
+				} catch (Exception el) {
+					el.printStackTrace();
+				}
+			}
+		});
+
+		btnTextFileDecrypt.setBounds(307, 278, 106, 25);
+		btnTextFileDecrypt.setText("DECRYPT");
+
+
+		btnBrowseTextFile.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnBrowseTextFile.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// TEXT FILE ENCRYPTION AND DECRYPTION: BROWSE TEXT FILE BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				try {
+					// Opening dialog to select text file and display file location in textbox
+					final Shell shell = new Shell();
+					FileDialog dlg = new FileDialog(shell, SWT.OPEN);
+					String fileName = dlg.open();
+					if (fileName !=null) {
+						browseFileTxtbox.setText(fileName);
+
+						// Enable Text File Encrypt button
+						btnTextFileEncrypt.setEnabled(true);
+					}
+				} catch (Exception e1) {
+					e1.printStackTrace();
+				}
+			}
+		});
+		btnBrowseTextFile.setBounds(10, 142, 139, 42);
+		btnBrowseTextFile.setText("Select text file:");
+
+		decryptedFileTxtbox = new Text(composite_2, SWT.BORDER | SWT.READ_ONLY);
+		decryptedFileTxtbox.setForeground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_DARK_SHADOW));
+		decryptedFileTxtbox.setBounds(155, 320, 258, 39);
+
+		Button btnTextFileClear = new Button(composite_2, SWT.NONE);
+		btnTextFileClear.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		btnTextFileClear.addSelectionListener(new SelectionAdapter() {
+			@Override
+
+			// IMAGE ENCRYPTION AND DECRYPTION: CLEAR ALL BUTTON
+			public void widgetSelected(SelectionEvent e) {
+				browseFileTxtbox.setText("");
+				encryptedFileTxtbox.setText("");
+				decryptedFileTxtbox.setText("");
+
+				btnTextFileEncrypt.setEnabled(false);
+				btnTextFileDecrypt.setEnabled(false);
+			}
+		});
+		btnTextFileClear.setBounds(338, 111, 75, 25);
+		btnTextFileClear.setText("CLEAR");
+
+		Label lblEncryptedTextFile = new Label(composite_2, SWT.WRAP | SWT.CENTER);
+		lblEncryptedTextFile.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblEncryptedTextFile.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblEncryptedTextFile.setBounds(10, 230, 139, 39);
+		lblEncryptedTextFile.setText("Encrypted text file location:");
+
+		Label lblDecryptedTextFile = new Label(composite_2, SWT.WRAP | SWT.CENTER);
+		lblDecryptedTextFile.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblDecryptedTextFile.setFont(SWTResourceManager.getFont("Segoe UI", 12, SWT.NORMAL));
+		lblDecryptedTextFile.setBounds(10, 320, 139, 39);
+		lblDecryptedTextFile.setText("Decrypted text file location:");
+
+		Label lblSelectTextFile = new Label(composite_2, SWT.CENTER);
+		lblSelectTextFile.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		lblSelectTextFile.setForeground(SWTResourceManager.getColor(SWT.COLOR_LIST_SELECTION));
+		lblSelectTextFile.setBounds(10, 48, 403, 15);
+		lblSelectTextFile.setText("Select a text file by browsing, then click Encrypt and Decrypt.");
+
+		Label label_3 = new Label(composite_2, SWT.CENTER);
+		label_3.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		label_3.setText("___________________________________________________________________________________");
+		label_3.setBounds(10, 65, 403, 15);
+
+	}
+}
